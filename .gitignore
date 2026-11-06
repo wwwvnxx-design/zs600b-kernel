@@ -1,0 +1,24 @@
+# 内核源码与输出（每次 CI 现拉现编）
+.ksrc/
+.kout/
+.tmpk/
+
+# 构建输出
+out/*
+!out/.gitkeep
+boot-new.img
+zImage
+System.map
+kernel.config
+kallsyms-report.txt
+repack.log
+
+# 工具链压缩包（CI 从 kernel.org 直接下，不入库）
+cache/tc.tar.xz
+
+# 不参与构建的参考镜像（体积大，仅本地留存）
+artifacts/boot_official.img
+
+# 系统杂项
+.DS_Store
+Thumbs.db

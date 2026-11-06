@@ -1,0 +1,15 @@
+# 统一换行符：脚本/配置一律 LF，二进制不做处理
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.dts  text eol=lf
+Kconfig text eol=lf
+
+*.img  binary
+*.dtb  binary
+*.xz   binary
+probe/uvc_cap binary

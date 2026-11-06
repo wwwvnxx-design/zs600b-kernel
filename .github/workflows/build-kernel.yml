@@ -1,0 +1,206 @@
+name: build-zs600b-kernel
+
+# 手动触发：仓库 Actions 页 -> 本工作流 -> Run workflow
+on:
+  workflow_dispatch:
+    inputs:
+      defconfig:
+        description: '内核 defconfig 名称'
+        required: false
+        default: 'rockchip_defconfig'
+      extra_config:
+        description: '额外打开 UVC/USB20/DEBUG_FS 等选项（M2 用；M1 验证编译链时选 false）'
+        type: boolean
+        required: false
+        default: true
+      kernel_ref:
+        description: 'rockchip-linux/kernel 分支'
+        required: false
+        default: 'release-3.10'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      ARCH: arm
+      KVER: ${{ github.event.inputs.kernel_ref || 'release-3.10' }}
+      DEFCONFIG: ${{ github.event.inputs.defconfig || 'rockchip_defconfig' }}
+      TC: x86_64-gcc-4.9.4-nolibc-arm-linux-gnueabi
+      KSRC: ${{ github.workspace }}/.ksrc
+      KOUT: ${{ github.workspace }}/.kout
+
+    steps:
+      - name: 取本仓库（迁移包）
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential xz-utils bison flex libssl-dev libelf-dev bc \
+            perl python3 rsync cpio kmod
+
+      - name: 下载 ARM 交叉工具链 (gcc 4.9.4 nolibc)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/tc"
+          ok=0
+          for U in \
+            "https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/4.9.4/${TC}.tar.xz" \
+            "https://mirrors.ustc.edu.cn/kernel.org/tools/crosstool/files/bin/x86_64/4.9.4/${TC}.tar.xz" \
+            "https://mirrors.tuna.tsinghua.edu.cn/kernel/tools/crosstool/files/bin/x86_64/4.9.4/${TC}.tar.xz" ; do
+            echo "尝试: $U"
+            if curl -fL --retry 2 --connect-timeout 15 -o /tmp/tc.tar.xz "$U"; then ok=1; break; fi
+          done
+          [ "$ok" = 1 ] || { echo "::error::工具链下载全部失败"; exit 1; }
+          tar -xJf /tmp/tc.tar.xz -C "$HOME/tc"
+          CC="$HOME/tc/gcc-4.9.4-nolibc/arm-linux-gnueabi/bin/arm-linux-gnueabi-gcc"
+          test -x "$CC" || { echo "::error::找不到 $CC"; ls -R "$HOME/tc" | head -50; exit 1; }
+          "$CC" --version | head -2
+          echo "CROSS_COMPILE=$HOME/tc/gcc-4.9.4-nolibc/arm-linux-gnueabi/bin/arm-linux-gnueabi-" >> "$GITHUB_ENV"
+
+      - name: 缓存 Rockchip 内核源码
+        id: kcache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.KSRC }}
+          key: rk-kernel-${{ env.KVER }}-v2
+
+      - name: 下载内核源码
+        if: steps.kcache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          rm -rf "$KSRC" "$GITHUB_WORKSPACE/.tmpk"
+          mkdir -p "$GITHUB_WORKSPACE/.tmpk"
+          curl -fL --retry 3 --connect-timeout 20 -o /tmp/k.tar.gz \
+            "https://codeload.github.com/rockchip-linux/kernel/tar.gz/refs/heads/${KVER}"
+          tar -xzf /tmp/k.tar.gz -C "$GITHUB_WORKSPACE/.tmpk"
+          mv "$GITHUB_WORKSPACE/.tmpk/kernel-${KVER}" "$KSRC"
+          rmdir "$GITHUB_WORKSPACE/.tmpk"
+          echo "源码大小: $(du -sh "$KSRC" | cut -f1)"
+
+      - name: 生成 .config
+        run: |
+          set -euo pipefail
+          rm -rf "$KOUT"; mkdir -p "$KOUT"
+          HOSTCFLAGS_SAFE="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -fcommon \
+            -Wno-error -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
+            -Wno-error=incompatible-pointer-types -Wno-error=format-overflow \
+            -Wno-error=format-truncation -Wno-error=stringop-overflow -Wno-error=array-bounds \
+            -Wno-error=dangling-pointer -Wno-error=use-after-free -Wno-error=maybe-uninitialized \
+            -Wno-error=misleading-indentation -Wno-error=unused-but-set-variable"
+          echo "HOSTCFLAGS_SAFE=$HOSTCFLAGS_SAFE" >> "$GITHUB_ENV"
+
+          cd "$KSRC"
+          make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+               "HOSTCFLAGS=$HOSTCFLAGS_SAFE" "$DEFCONFIG"
+
+          if [ "${{ github.event.inputs.extra_config }}" = "true" ]; then
+            echo "== 追加 M2 配置 =="
+            {
+              echo ""
+              echo "CONFIG_USB20_HOST=y"
+              echo "CONFIG_USB20_OTG=y"
+              echo "# CONFIG_USB_DWC2 is not set"
+              echo "CONFIG_MEDIA_SUPPORT=y"
+              echo "CONFIG_MEDIA_USB_SUPPORT=y"
+              echo "CONFIG_MEDIA_CAMERA_SUPPORT=y"
+              echo "CONFIG_USB_VIDEO_CLASS=y"
+              echo "CONFIG_VIDEO_DEV=y"
+              echo "CONFIG_DEBUG_FS=y"
+              echo "CONFIG_IKCONFIG=y"
+              echo "CONFIG_IKCONFIG_PROC=y"
+              echo "CONFIG_KERNEL_LZO=y"
+            } >> "$KOUT/.config"
+          else
+            echo "== M1 原样 defconfig，不追加配置 =="
+          fi
+
+          make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+               "HOSTCFLAGS=$HOSTCFLAGS_SAFE" olddefconfig
+
+      - name: 编译 zImage
+        run: |
+          set -euo pipefail
+          cd "$KSRC"
+          make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+               "HOSTCFLAGS=$HOSTCFLAGS_SAFE" \
+               KCFLAGS="-Wno-error -fno-strict-aliasing" \
+               -j"$(nproc)" zImage
+          ls -l "$KOUT/arch/arm/boot/zImage"
+
+      - name: 符号体检
+        if: always()
+        run: |
+          if [ -s "$KOUT/System.map" ]; then
+            python3 verify_kallsyms.py --map "$KOUT/System.map" --stock artifacts/ks_stock.txt \
+              | tee kallsyms-report.txt || true
+          else
+            echo "System.map 不存在（编译未完成）" | tee kallsyms-report.txt
+          fi
+
+      - name: 打包 boot.img
+        if: success()
+        run: |
+          set -euo pipefail
+          python3 repack_boot.py \
+            --base artifacts/boot_device.img \
+            --kernel "$KOUT/arch/arm/boot/zImage" \
+            --out boot-new.img --check | tee repack.log
+          ls -l boot-new.img
+          cp "$KOUT/arch/arm/boot/zImage" zImage
+          cp "$KOUT/System.map" System.map
+          cp "$KOUT/.config" kernel.config
+          {
+            echo "### 编译产物"
+            echo '```'
+            echo "zImage       : $(stat -c%s zImage) B"
+            echo "boot-new.img : $(stat -c%s boot-new.img) B"
+            echo "gcc          : $("${CROSS_COMPILE}gcc" --version | head -1)"
+            echo '```'
+            echo "### 关键配置实际取值"
+            echo '```'
+            grep -E '^CONFIG_(USB20_HOST|USB20_OTG|USB_VIDEO_CLASS|VIDEO_DEV|MEDIA_USB_SUPPORT|DEBUG_FS|KERNEL_LZO|IKCONFIG)' kernel.config || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传产物
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zs600b-kernel-${{ github.run_number }}
+          path: |
+            zImage
+            System.map
+            kernel.config
+            boot-new.img
+            kallsyms-report.txt
+            repack.log
+          retention-days: 30
+
+      - name: 失败时保留现场
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zs600b-failure-${{ github.run_number }}
+          path: |
+            kernel.config
+            kallsyms-report.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 符号体检报告贴到摘要
+        if: always()
+        run: |
+          {
+            echo ""
+            echo "### 符号体检"
+            echo '<details><summary>展开</summary>'
+            echo ""
+            echo '```'
+            head -80 kallsyms-report.txt 2>/dev/null || echo "(无)"
+            echo '```'
+            echo ''
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"

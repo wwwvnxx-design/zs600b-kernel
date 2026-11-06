@@ -1,0 +1,75 @@
+ZS600B (DJI CrystalSky) 内核逆向 · 事实清单
+采集时间：2026-11-06    设备序列号：1TSB3T3IFS
+
+== 系统 ==
+型号            : ZS600B
+Android         : 5.1.1  (build v0.6.6.8-62c05681 release-keys)
+内核            : Linux version 3.10.0 (rc_mg@rdcmp83-in)
+                  编译器 gcc version 4.6.x-google 20120106 (prerelease) (GCC)
+                  #1 SMP PREEMPT
+CPU             : RK3288 (ARMv7, Cortex-A17 x4)
+
+== cmdline ==
+vmalloc=496M console=ttyFIQ0 androidboot.selinux=disabled androidboot.hardware=rk30board
+androidboot.console=ttyFIQ0 init=/init
+mtdparts=rk29xxnand:0x00002000@0x00002000(uboot),0x00002000@0x00004000(misc),
+0x00008000@0x00006000(resource),0x00008000@0x0000e000(kernel),0x00010000@0x00016000(boot),
+0x00010000@0x00026000(recovery),0x0001a000@0x00036000(backup),0x00080000@0x00050000(cache),
+0x00002000@0x000D0000(kpanic),0x00600000@0x000D2000(system),0x00008000@0x006D2000(metadata),
+0x00600000@0x006DA000(userdata),0x00020000@0x00CDA000(radical_update),-@0x00CFA000(user)
+storagemedia=emmc loader.timestamp=2017-11-06_18:05:47
+androidboot.securemode=1 androidboot.mode=emmc
+
+== 分区（/proc/partitions）==
+mmcblk0  122138624 KB
+ p1  4096    uboot
+ p2  4096    misc
+ p3  16384   resource
+ p4  16384   kernel      <-- 实测全 0，zImage 不在这个分区
+ p5  32768   boot        <-- 真正装 boot.img，脚本只碰这里
+ p6  32768   recovery
+ p7  53248   backup
+ p8  262144  cache
+ p9  4096    kpanic
+ p10 3145728 system
+ p11 16384   metadata
+ p12 3145728 userdata
+ p13 65536   radical_update
+ p14 115331072 user
+
+== boot 分区头（实测）==
+magic       : ANDROID!
+page_size   : 16384
+kernel      : 5137568  @0x60408000   off 0x4000
+ramdisk     : 1337812  @0x62000000   off 0x4EC000
+second      : 335872   @0x60F00000   off 0x634000   <-- RSCE 容器，内部 @0x800 是 dtb
+tags_addr   : 0x60088000
+dt_size     : 0
+cmdline     : 空（来自 DTB / U-Boot）
+镜像总长    : 6848512 (0x688000)
+尾部 8KB    : 全 0 —— 无 AVB / 无 RSA / 无 TRUST 签名块
+
+== 启动链与校验 ==
+U-Boot 位置 : eMMC 0x46000（不在 uboot 分区）
+U-Boot 环境 : verify=n ，bootcmd=bootrk
+结论        : boot.img 无签名，可自由替换内核；uboot/misc 不用动
+
+== USB 控制器 ==
+ff540000.usb : 驱动 usb20_host (dwc_otg)，bus3，USB-A 口（采集卡走这里）
+               版本 3.10a 21-DEC-2012（Synopsys 老驱动，非 dwc2）
+ff580000.usb : 驱动 usb20_otg (dwc_otg)，bus2，micro-USB / OTG
+bus1         : rockchip_ehci_host（唯一真 EHCI，端口被板载 WiFi 占用）
+
+== 已知缺陷（本次要修的）==
+现象 : UVC 采集卡在 USB-A 上黑屏；libusb 与系统 uvcvideo 两条路径都拿不到数据
+证据 : /sys/kernel/debug/usb/devices 中 bus3
+       Alloc=-37157048/800us (724078%)， #Iso=-676867   —— ISO 带宽记账溢出为负
+       0xAA 哨兵法：URB 全 COMPLETED、包长正常、速率随分辨率变化，但缓冲区一个字节未被写
+定性 : dwc_otg 的等时(ISO)调度/DMA 路径缺陷，非调用方问题（bulk 设备 RTL-SDR 正常）
+修复 : 只能改内核。RK 3.10 源码树里没有 dwc2，只能修 dwc_otg_310
+
+== 配置指纹 ==
+zImage 用 LZO 压缩（boot/kernel.bin 里能扫到 lzop 流），与 rockchip_defconfig 的
+CONFIG_KERNEL_LZO=y 一致 => 原厂基本用的就是 Rockchip 公版 defconfig。
+/proc/config.gz 不存在、kallsyms 里也没有 kernel_config_data => 内核未内嵌配置，
+唯一可用的「配置基线」是 arch/arm/configs/rockchip_defconfig + artifacts/ks_stock.txt。
