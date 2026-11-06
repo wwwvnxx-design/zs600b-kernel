@@ -85,13 +85,13 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "$KOUT"; mkdir -p "$KOUT"
-          HOSTCFLAGS_SAFE="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -fcommon \
-            -Wno-error -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
-            -Wno-error=incompatible-pointer-types -Wno-error=format-overflow \
-            -Wno-error=format-truncation -Wno-error=stringop-overflow -Wno-error=array-bounds \
-            -Wno-error=dangling-pointer -Wno-error=use-after-free -Wno-error=maybe-uninitialized \
-            -Wno-error=misleading-indentation -Wno-error=unused-but-set-variable"
+          # 注意：不要在这里罗列 -Wno-error=<type>。gcc 对未知警告名会直接报
+          #   cc1: error: '-Wno-error=xxx': no option '-Wxxx'
+          # 而不同版本引入的警告名不同（dangling-pointer / use-after-free 是 gcc 12+）。
+          # 只用 -Wno-error 全局降级，任何 gcc 版本都识别。
+          HOSTCFLAGS_SAFE="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -fcommon -Wno-error"
           echo "HOSTCFLAGS_SAFE=$HOSTCFLAGS_SAFE" >> "$GITHUB_ENV"
+          echo "host gcc: $(gcc --version | head -1)"
 
           cd "$KSRC"
           make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
