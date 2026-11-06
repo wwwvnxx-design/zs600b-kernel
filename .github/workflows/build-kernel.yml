@@ -125,6 +125,11 @@ jobs:
         run: |
           set -euo pipefail
           cd "$KSRC"
+          # rockchip 3.10 顶层 Makefile 第 356 行：只要 scripts/gcc-wrapper.py 存在就
+          #   CC = $(srctree)/scripts/gcc-wrapper.py $(CROSS_COMPILE)gcc
+          # 该脚本是 Python 2 语法（print "...")，runner 上 python=python3 直接 SyntaxError。
+          # 它只解析 stderr 把 warning 当错误，不改变编译参数，删掉不影响产物。
+          rm -f "$KSRC/scripts/gcc-wrapper.py"
           make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
                "HOSTCFLAGS=$HOSTCFLAGS_SAFE" \
                KCFLAGS="-Wno-error -fno-strict-aliasing" \

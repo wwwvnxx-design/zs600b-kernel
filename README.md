@@ -142,6 +142,8 @@ M3 的排查入口（之前已定位到现象，代码级还没落点）：
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
+| `scripts/gcc-wrapper.py: SyntaxError: Missing parentheses in call to 'print'` | rockchip 3.10 顶层 Makefile 只要该文件存在就 `CC = scripts/gcc-wrapper.py $(CROSS_COMPILE)gcc`，而它是 Python 2 语法 | 删掉或改名 `scripts/gcc-wrapper.py`。它只解析 stderr 把 warning 当错误，不参与编译参数，删除不影响产物。CI 与 `build_kernel.sh` 均已处理 |
+| `'-Wno-error=xxx': no option '-Wxxx'` | `-Wno-error=<type>` 要求该警告名存在；`dangling-pointer`/`use-after-free` 是 gcc 12+ 才引入的 | 不要罗列具体警告名，只用全局 `-Wno-error` |
 | `LZO arch/arm/boot/compressed/piggy.lzo` 阶段报 `lzop: command not found` | `CONFIG_KERNEL_LZO=y` 时 `scripts/Makefile.lib` 的 `cmd_lzo` 直接调 `lzop -9`，宿主机默认没这命令 | `apt install lzop`（CI 与本机脚本均已加入）。换成 `CONFIG_KERNEL_LZ4=y` 则改为需要 `lz4` |
 | `multiple definition of ...`（编 host 工具时） | host gcc ≥10 默认 `-fno-common` | `build_kernel.sh` 已加 `HOSTCFLAGS=...-fcommon`，若仍报就再补 `-fno-common` 之外的老式声明 |
 | `implicit declaration of function` 报错 | gcc 14 起隐式声明为 error | 脚本已加 `-Wno-error=implicit-function-declaration`；24.04 上建议 `sudo apt install gcc-12` 后 `CC=gcc-12 HOSTCC=gcc-12` |

@@ -23,10 +23,18 @@ export ARCH=arm
 [[ -f "$KSRC/Makefile" ]] || { echo "[!] 找不到内核源码：$KSRC"; exit 1; }
 mkdir -p "$OUT"
 
-# 现代 host gcc 编 3.10 的两道坎：-fno-common 默认开启、隐式声明被当错误
-HOST_CFLAGS="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -fcommon -Wno-error -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types"
+# 现代 host gcc 编 3.10：主要是 -fno-common 默认开启。
+# 不要罗列 -Wno-error=<type>：gcc 对未知警告名会直接报 "no option"，各版本引入的警告名不同。
+HOST_CFLAGS="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -fcommon -Wno-error"
 MK=(make -C "$KSRC" O="$OUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE"
-    "HOSTCFLAGS=$HOST_CFLAGS" "KCFLAGS=-Wno-error")
+    "HOSTCFLAGS=$HOST_CFLAGS" "KCFLAGS=-Wno-error -fno-strict-aliasing")
+
+# rockchip 3.10 顶层 Makefile：只要 scripts/gcc-wrapper.py 存在，CC 就被它接管。
+# 该脚本是 Python 2 语法，Ubuntu 20.04+ 默认无 python2，会直接 SyntaxError 中断编译。
+# 它只解析 stderr 把 warning 当错误，不影响编译参数与产物，直接禁用。
+if [[ -f "$KSRC/scripts/gcc-wrapper.py" ]]; then
+  mv "$KSRC/scripts/gcc-wrapper.py" "$KSRC/scripts/gcc-wrapper.py.disabled"
+fi
 
 msg() { printf '\n\033[1;36m[*] %s\033[0m\n' "$*"; }
 
@@ -46,19 +54,26 @@ case "$MODE" in
 
     msg "2/4 叠加 ZS600B 配置片段"
     # 关键项：USB 双控制器 + UVC + 输入设备 + 摄像头，均为本机硬件实测需要
-    "$KSRC/scripts/config" --file "$OUT/.config" \
-      -e USB20_HOST -e USB20_HOST_EN \
-      -e USB20_OTG  -e USB20_OTG_EN \
-      -e DWC_OTG_310 \
-      -e DWC_OTG_HOST_CHANNEL_NUM_16 \
-      -e MEDIA_SUPPORT -e MEDIA_USB_SUPPORT -e MEDIA_CAMERA_SUPPORT \
-      -e USB_VIDEO_CLASS \
-      -e USB_STORAGE -e USB_HID -e USB_HID_GENERIC \
-      -e SQUASHFS -e EXT4_FS \
-      -e IKCONFIG -e IKCONFIG_PROC \
-      -e DEBUG_FS \
-      2>/dev/null || echo "    (部分符号在本树不存在，忽略)"
-    # 打开配置内嵌，方便以后再从 /proc/config.gz 直接取配置
+    # 3.10 的 scripts/config 不一定支持 --file，直接追加到 .config（后者覆盖前者）
+    {
+      echo ""
+      echo "CONFIG_USB20_HOST=y"
+      echo "CONFIG_USB20_OTG=y"
+      echo "CONFIG_DWC_OTG_310=y"
+      echo "CONFIG_MEDIA_SUPPORT=y"
+      echo "CONFIG_MEDIA_USB_SUPPORT=y"
+      echo "CONFIG_MEDIA_CAMERA_SUPPORT=y"
+      echo "CONFIG_USB_VIDEO_CLASS=y"
+      echo "CONFIG_VIDEO_DEV=y"
+      echo "CONFIG_USB_STORAGE=y"
+      echo "CONFIG_USB_HID=y"
+      echo "CONFIG_SQUASHFS=y"
+      echo "CONFIG_EXT4_FS=y"
+      echo "CONFIG_IKCONFIG=y"
+      echo "CONFIG_IKCONFIG_PROC=y"
+      echo "CONFIG_DEBUG_FS=y"
+      echo "CONFIG_KERNEL_LZO=y"
+    } >> "$OUT/.config"
     "${MK[@]}" olddefconfig
     ;;
 esac
