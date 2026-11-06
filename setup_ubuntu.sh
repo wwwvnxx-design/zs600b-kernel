@@ -27,7 +27,7 @@ mkdir -p "$ROOT" "$TCDIR" "$CACHE" "$ROOT/src" "$ROOT/out"
 msg "1/4 安装编译依赖（需要 sudo）"
 sudo apt-get update -y
 sudo apt-get install -y --no-install-recommends \
-  build-essential git curl ca-certificates xz-utils \
+  build-essential git curl ca-certificates xz-utils lzop lz4 \
   bison flex libssl-dev libelf-dev bc \
   python3 python3-pip rsync unzip zip \
   libncurses5-dev device-tree-compiler kmod usbutils android-tools-adb \

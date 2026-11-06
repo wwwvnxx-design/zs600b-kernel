@@ -37,9 +37,10 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update -y
+          # lzop 必需：CONFIG_KERNEL_LZO=y 时 scripts/Makefile.lib 的 cmd_lzo 直接调 lzop -9
           sudo apt-get install -y --no-install-recommends \
-            build-essential xz-utils bison flex libssl-dev libelf-dev bc \
-            perl python3 rsync cpio kmod
+            build-essential xz-utils lzop lz4 bison flex libssl-dev libelf-dev bc \
+            perl python3 rsync cpio kmod device-tree-compiler
 
       - name: 下载 ARM 交叉工具链 (gcc 4.9.4 nolibc)
         run: |
@@ -144,10 +145,12 @@ jobs:
         if: success()
         run: |
           set -euo pipefail
+          # 注意：不要加 --check。该参数要求内核尺寸与基底完全一致才通过，
+          # 换成新内核必然不同；结构完整性已由脚本内置 assert（kernel/ramdisk/second 回读比对）保证。
           python3 repack_boot.py \
             --base artifacts/boot_device.img \
             --kernel "$KOUT/arch/arm/boot/zImage" \
-            --out boot-new.img --check | tee repack.log
+            --out boot-new.img | tee repack.log
           ls -l boot-new.img
           cp "$KOUT/arch/arm/boot/zImage" zImage
           cp "$KOUT/System.map" System.map

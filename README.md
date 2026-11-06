@@ -142,6 +142,7 @@ M3 的排查入口（之前已定位到现象，代码级还没落点）：
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
+| `LZO arch/arm/boot/compressed/piggy.lzo` 阶段报 `lzop: command not found` | `CONFIG_KERNEL_LZO=y` 时 `scripts/Makefile.lib` 的 `cmd_lzo` 直接调 `lzop -9`，宿主机默认没这命令 | `apt install lzop`（CI 与本机脚本均已加入）。换成 `CONFIG_KERNEL_LZ4=y` 则改为需要 `lz4` |
 | `multiple definition of ...`（编 host 工具时） | host gcc ≥10 默认 `-fno-common` | `build_kernel.sh` 已加 `HOSTCFLAGS=...-fcommon`，若仍报就再补 `-fno-common` 之外的老式声明 |
 | `implicit declaration of function` 报错 | gcc 14 起隐式声明为 error | 脚本已加 `-Wno-error=implicit-function-declaration`；24.04 上建议 `sudo apt install gcc-12` 后 `CC=gcc-12 HOSTCC=gcc-12` |
 | `make: *** mixed implicit and normal rules` | make ≥4 与老 Makefile 语法冲突 | 极少数文件触发，按报错行把 `a b: c` 拆成两条规则 |
