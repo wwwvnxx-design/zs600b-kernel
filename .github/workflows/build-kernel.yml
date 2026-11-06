@@ -28,7 +28,7 @@ jobs:
       DEFCONFIG: ${{ github.event.inputs.defconfig || 'rockchip_defconfig' }}
       TC: x86_64-gcc-4.9.4-nolibc-arm-linux-gnueabi
       KSRC: ${{ github.workspace }}/.ksrc
-      KOUT: ${{ github.workspace }}/.kout
+      KTGZ: /home/runner/k.tar.gz
 
     steps:
       - name: 取本仓库（迁移包）
@@ -84,30 +84,35 @@ jobs:
           echo "cc1 自检通过"
           echo "CROSS_COMPILE=$HOME/tc/gcc-4.9.4-nolibc/arm-linux-gnueabi/bin/arm-linux-gnueabi-" >> "$GITHUB_ENV"
 
-      - name: 缓存 Rockchip 内核源码
+      - name: 缓存内核源码包
         id: kcache
         uses: actions/cache@v4
         with:
-          path: ${{ env.KSRC }}
-          key: rk-kernel-${{ env.KVER }}-v2
+          path: ${{ env.KTGZ }}
+          key: rk-kernel-tgz-${{ env.KVER }}-v1
 
-      - name: 下载内核源码
-        if: steps.kcache.outputs.cache-hit != 'true'
+      - name: 解包内核源码（永远从干净包展开）
         run: |
           set -euo pipefail
+          if [ ! -s "$KTGZ" ]; then
+            echo "缓存未命中，下载源码..."
+            curl -fL --retry 3 --connect-timeout 20 -o "$KTGZ" \
+              "https://codeload.github.com/rockchip-linux/kernel/tar.gz/refs/heads/${KVER}"
+          else
+            echo "命中缓存: $(du -h "$KTGZ" | cut -f1)"
+          fi
           rm -rf "$KSRC" "$GITHUB_WORKSPACE/.tmpk"
           mkdir -p "$GITHUB_WORKSPACE/.tmpk"
-          curl -fL --retry 3 --connect-timeout 20 -o /tmp/k.tar.gz \
-            "https://codeload.github.com/rockchip-linux/kernel/tar.gz/refs/heads/${KVER}"
-          tar -xzf /tmp/k.tar.gz -C "$GITHUB_WORKSPACE/.tmpk"
+          tar -xzf "$KTGZ" -C "$GITHUB_WORKSPACE/.tmpk"
           mv "$GITHUB_WORKSPACE/.tmpk/kernel-${KVER}" "$KSRC"
           rmdir "$GITHUB_WORKSPACE/.tmpk"
           echo "源码大小: $(du -sh "$KSRC" | cut -f1)"
+          # 确认 mali 许可文件在位（决定 Kbuild 走 GPL 还是 proprietary 分支）
+          ls -l "$KSRC/drivers/gpu/arm/mali400/mali/linux/license/gpl/" || true
 
       - name: 生成 .config
         run: |
           set -euo pipefail
-          rm -rf "$KOUT"; mkdir -p "$KOUT"
           # 注意：不要在这里罗列 -Wno-error=<type>。gcc 对未知警告名会直接报
           #   cc1: error: '-Wno-error=xxx': no option '-Wxxx'
           # 而不同版本引入的警告名不同（dangling-pointer / use-after-free 是 gcc 12+）。
@@ -117,7 +122,7 @@ jobs:
           echo "host gcc: $(gcc --version | head -1)"
 
           cd "$KSRC"
-          make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+          make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
                "HOSTCFLAGS=$HOSTCFLAGS_SAFE" "$DEFCONFIG"
 
           if [ "${{ github.event.inputs.extra_config }}" = "true" ]; then
@@ -136,12 +141,12 @@ jobs:
               echo "CONFIG_IKCONFIG=y"
               echo "CONFIG_IKCONFIG_PROC=y"
               echo "CONFIG_KERNEL_LZO=y"
-            } >> "$KOUT/.config"
+            } >> "$KSRC/.config"
           else
             echo "== M1 原样 defconfig，不追加配置 =="
           fi
 
-          make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+          make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
                "HOSTCFLAGS=$HOSTCFLAGS_SAFE" olddefconfig
 
       - name: 编译 zImage
@@ -153,17 +158,17 @@ jobs:
           # 该脚本是 Python 2 语法（print "...")，runner 上 python=python3 直接 SyntaxError。
           # 它只解析 stderr 把 warning 当错误，不改变编译参数，删掉不影响产物。
           rm -f "$KSRC/scripts/gcc-wrapper.py"
-          make O="$KOUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+          make ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
                "HOSTCFLAGS=$HOSTCFLAGS_SAFE" \
                KCFLAGS="-Wno-error -fno-strict-aliasing" \
                -j"$(nproc)" zImage
-          ls -l "$KOUT/arch/arm/boot/zImage"
+          ls -l "$KSRC/arch/arm/boot/zImage"
 
       - name: 符号体检
         if: always()
         run: |
-          if [ -s "$KOUT/System.map" ]; then
-            python3 verify_kallsyms.py --map "$KOUT/System.map" --stock artifacts/ks_stock.txt \
+          if [ -s "$KSRC/System.map" ]; then
+            python3 verify_kallsyms.py --map "$KSRC/System.map" --stock artifacts/ks_stock.txt \
               | tee kallsyms-report.txt || true
           else
             echo "System.map 不存在（编译未完成）" | tee kallsyms-report.txt
@@ -177,12 +182,12 @@ jobs:
           # 换成新内核必然不同；结构完整性已由脚本内置 assert（kernel/ramdisk/second 回读比对）保证。
           python3 repack_boot.py \
             --base artifacts/boot_device.img \
-            --kernel "$KOUT/arch/arm/boot/zImage" \
+            --kernel "$KSRC/arch/arm/boot/zImage" \
             --out boot-new.img | tee repack.log
           ls -l boot-new.img
-          cp "$KOUT/arch/arm/boot/zImage" zImage
-          cp "$KOUT/System.map" System.map
-          cp "$KOUT/.config" kernel.config
+          cp "$KSRC/arch/arm/boot/zImage" zImage
+          cp "$KSRC/System.map" System.map
+          cp "$KSRC/.config" kernel.config
           {
             echo "### 编译产物"
             echo '```'

@@ -26,7 +26,9 @@ mkdir -p "$OUT"
 # 现代 host gcc 编 3.10：主要是 -fno-common 默认开启。
 # 不要罗列 -Wno-error=<type>：gcc 对未知警告名会直接报 "no option"，各版本引入的警告名不同。
 HOST_CFLAGS="-Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -fcommon -Wno-error"
-MK=(make -C "$KSRC" O="$OUT" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE"
+# 必须是源码树内构建，不能加 O=：mali 的 Kbuild 用 $(wildcard $(src)/linux/license/gpl/*)
+# 判断许可分支，src 是相对路径，O= 时 cwd 在输出目录会让通配符落空并直接 $(error) 中止。
+MK=(make -C "$KSRC" ARCH=arm CROSS_COMPILE="$CROSS_COMPILE"
     "HOSTCFLAGS=$HOST_CFLAGS" "KCFLAGS=-Wno-error -fno-strict-aliasing")
 
 # rockchip 3.10 顶层 Makefile：只要 scripts/gcc-wrapper.py 存在，CC 就被它接管。
@@ -46,7 +48,7 @@ case "$MODE" in
     exit 0
     ;;
   -c|continue)
-    [[ -f "$OUT/.config" ]] || { echo "[!] $OUT/.config 不存在，先跑完整构建"; exit 1; }
+    [[ -f "$KSRC/.config" ]] || { echo "[!] $KSRC/.config 不存在，先跑完整构建"; exit 1; }
     ;;
   *)
     msg "1/4 rockchip_defconfig"
@@ -73,14 +75,14 @@ case "$MODE" in
       echo "CONFIG_IKCONFIG_PROC=y"
       echo "CONFIG_DEBUG_FS=y"
       echo "CONFIG_KERNEL_LZO=y"
-    } >> "$OUT/.config"
+    } >> "$KSRC/.config"
     "${MK[@]}" olddefconfig
     ;;
 esac
 
 msg "3/4 校验关键配置"
 for k in CONFIG_USB20_HOST CONFIG_USB20_OTG CONFIG_USB_VIDEO_CLASS CONFIG_ARCH_ROCKCHIP; do
-  v=$(grep -E "^$k=|^# $k is not set" "$OUT/.config" | head -1)
+  v=$(grep -E "^$k=|^# $k is not set" "$KSRC/.config" | head -1)
   printf '    %-26s %s\n' "$k" "${v:-<缺失>}"
   [[ -n "$v" && "$v" != *"is not set"* ]] || echo "    [!] $k 未启用，可能导致外设不工作"
 done
@@ -88,8 +90,8 @@ done
 msg "4/4 编译 zImage（$JOBS 线程）"
 time "${MK[@]}" -j"$JOBS" zImage
 
-Z="$OUT/arch/arm/boot/zImage"
-SM="$OUT/System.map"
+Z="$KSRC/arch/arm/boot/zImage"
+SM="$KSRC/System.map"
 [[ -f "$Z" ]] || { echo "[!] 未生成 zImage"; exit 1; }
 
 printf '\n\033[1;32m[+] 构建完成\033[0m\n'
@@ -103,6 +105,6 @@ cat <<EOF
     下一步：
       1) 差异体检：  python3 verify_kallsyms.py --map $SM --stock $HERE/artifacts/ks_stock.txt
       2) 打 boot.img：python3 repack_boot.py --base artifacts/boot_device.img \\
-                          --kernel $Z --out out/boot-new.img
+                          --kernel $Z --out $HERE/out/boot-new.img
       3) 刷入设备：  bash flash_boot.sh flash out/boot-new.img
 EOF
