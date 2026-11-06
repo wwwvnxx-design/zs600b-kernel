@@ -142,6 +142,7 @@ M3 的排查入口（之前已定位到现象，代码级还没落点）：
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
+| `cc1: error while loading shared libraries: libmpfr.so.4: cannot open shared object file` | 工具链的 `cc1` 动态链接 MPFR 3.x 的 SONAME，Ubuntu 20.04+ 只带 `libmpfr.so.6` | 补 `libmpfr4_3.1.4-1_amd64.deb` 并加进 `LD_LIBRARY_PATH`（CI 与 `setup_ubuntu.sh` 已自动处理）。`libgmp.so.10`/`libmpc.so.3` 系统自带不用管。**注意 `gcc --version` 测不出来**，要真编一个 `.c` 才知道 |
 | `scripts/gcc-wrapper.py: SyntaxError: Missing parentheses in call to 'print'` | rockchip 3.10 顶层 Makefile 只要该文件存在就 `CC = scripts/gcc-wrapper.py $(CROSS_COMPILE)gcc`，而它是 Python 2 语法 | 删掉或改名 `scripts/gcc-wrapper.py`。它只解析 stderr 把 warning 当错误，不参与编译参数，删除不影响产物。CI 与 `build_kernel.sh` 均已处理 |
 | `'-Wno-error=xxx': no option '-Wxxx'` | `-Wno-error=<type>` 要求该警告名存在；`dangling-pointer`/`use-after-free` 是 gcc 12+ 才引入的 | 不要罗列具体警告名，只用全局 `-Wno-error` |
 | `LZO arch/arm/boot/compressed/piggy.lzo` 阶段报 `lzop: command not found` | `CONFIG_KERNEL_LZO=y` 时 `scripts/Makefile.lib` 的 `cmd_lzo` 直接调 `lzop -9`，宿主机默认没这命令 | `apt install lzop`（CI 与本机脚本均已加入）。换成 `CONFIG_KERNEL_LZ4=y` 则改为需要 `lz4` |

@@ -64,7 +64,41 @@ else
   tar -xJf "$CACHE/$TC_TARBALL" -C "$TCDIR"
   [[ -x "$TC_BIN" ]] || die "解压后找不到 $TC_BIN"
 fi
+
+# 该工具链的 cc1 动态链接 libmpfr.so.4（MPFR 3.x 的 SONAME）。
+# Ubuntu 20.04+ 只提供 libmpfr.so.6，不补这个库会直接报：
+#   cc1: error while loading shared libraries: libmpfr.so.4
+# libgmp.so.10 / libmpc.so.3 系统自带，无需处理。
+msg "2b/4 补齐工具链依赖 libmpfr.so.4"
+MPFR_DIR="$TCDIR/libs/usr/lib/x86_64-linux-gnu"
+if [[ -f "$MPFR_DIR/libmpfr.so.4" ]]; then
+  echo "    已存在，跳过"
+elif [[ "$(uname -m)" != "x86_64" ]]; then
+  echo "    [!] 主机不是 x86_64（$(uname -m)），本包工具链是 x86_64 host，无法使用"
+else
+  DEB="$CACHE/libmpfr4_3.1.4-1_amd64.deb"
+  if [[ ! -s "$DEB" ]]; then
+    for U in \
+      "http://archive.ubuntu.com/ubuntu/pool/main/m/mpfr4/libmpfr4_3.1.4-1_amd64.deb" \
+      "http://security.ubuntu.com/ubuntu/pool/main/m/mpfr4/libmpfr4_3.1.4-1_amd64.deb" ; do
+      echo "    下载： $U"
+      if curl -fL --retry 3 --connect-timeout 20 -o "$DEB.part" "$U"; then mv "$DEB.part" "$DEB"; break; fi
+      rm -f "$DEB.part"
+    done
+  fi
+  [[ -s "$DEB" ]] || die "libmpfr4 下载失败，请手动放到 $CACHE/"
+  mkdir -p "$TCDIR/libs"
+  dpkg -x "$DEB" "$TCDIR/libs"
+  ls -l "$MPFR_DIR"/libmpfr.so.4* | sed 's/^/    /'
+fi
+
+export LD_LIBRARY_PATH="$MPFR_DIR:${LD_LIBRARY_PATH:-}"
 "$TC_BIN" --version | head -1
+# 真正驱动一次 cc1：--version 只跑 gcc 驱动，碰不到 cc1，测不出库是否齐全
+echo 'int main(void){return 0;}' > "$CACHE/.probe.c"
+"$TC_BIN" -c "$CACHE/.probe.c" -o "$CACHE/.probe.o" || die "cc1 无法运行，工具链依赖不全"
+echo "    cc1 自检通过"
+rm -f "$CACHE/.probe.c" "$CACHE/.probe.o"
 
 # ---------------------------------------------------------------- 3. 内核源码
 msg "3/4 准备内核源码 $KVER"
@@ -99,6 +133,8 @@ export KSRC="$KSRC"
 export CROSS_COMPILE="$TCDIR/gcc-4.9.4-nolibc/arm-linux-gnueabi/bin/arm-linux-gnueabi-"
 export ARCH=arm
 export PATH="\$(dirname "\$CROSS_COMPILE"):\$PATH"
+# cc1 需要 MPFR 3.x 的 libmpfr.so.4，系统只有 .so.6，用这里补的
+export LD_LIBRARY_PATH="$TCDIR/libs/usr/lib/x86_64-linux-gnu\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
 EOF
 cat "$ROOT/env.sh" | sed 's/^/    /'
 

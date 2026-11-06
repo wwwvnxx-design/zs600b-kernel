@@ -58,7 +58,30 @@ jobs:
           tar -xJf /tmp/tc.tar.xz -C "$HOME/tc"
           CC="$HOME/tc/gcc-4.9.4-nolibc/arm-linux-gnueabi/bin/arm-linux-gnueabi-gcc"
           test -x "$CC" || { echo "::error::找不到 $CC"; ls -R "$HOME/tc" | head -50; exit 1; }
+
+          # 该工具链的 cc1 动态依赖 libmpfr.so.4（MPFR 3.x 的 SONAME），
+          # Ubuntu 22.04 只带 libmpfr.so.6，必须单独补老库，否则：
+          #   cc1: error while loading shared libraries: libmpfr.so.4
+          # libgmp.so.10 / libmpc.so.3 在 jammy 都有，无需处理。
+          ok2=0
+          for U in \
+            "http://archive.ubuntu.com/ubuntu/pool/main/m/mpfr4/libmpfr4_3.1.4-1_amd64.deb" \
+            "http://security.ubuntu.com/ubuntu/pool/main/m/mpfr4/libmpfr4_3.1.4-1_amd64.deb" ; do
+            if curl -fL --retry 2 --connect-timeout 15 -o /tmp/libmpfr4.deb "$U"; then ok2=1; break; fi
+          done
+          [ "$ok2" = 1 ] || { echo "::error::libmpfr4 下载失败"; exit 1; }
+          mkdir -p "$HOME/tc/libs"
+          dpkg -x /tmp/libmpfr4.deb "$HOME/tc/libs"
+          MPFR_DIR="$HOME/tc/libs/usr/lib/x86_64-linux-gnu"
+          ls -l "$MPFR_DIR" | head -5
+          echo "LD_LIBRARY_PATH=$MPFR_DIR:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          export LD_LIBRARY_PATH="$MPFR_DIR:${LD_LIBRARY_PATH:-}"
+
           "$CC" --version | head -2
+          # 真正驱动一次 cc1，确认库能加载（--version 不碰 cc1，测不出来）
+          echo 'int main(void){return 0;}' > /tmp/probe.c
+          "$CC" -c /tmp/probe.c -o /tmp/probe.o || { echo "::error::cc1 无法运行，工具链不可用"; exit 1; }
+          echo "cc1 自检通过"
           echo "CROSS_COMPILE=$HOME/tc/gcc-4.9.4-nolibc/arm-linux-gnueabi/bin/arm-linux-gnueabi-" >> "$GITHUB_ENV"
 
       - name: 缓存 Rockchip 内核源码
