@@ -14,10 +14,10 @@ on:
         required: false
         default: true
       trim:
-        description: '裁剪与启动无关的子系统，把内核压回原厂尺寸包络（M2 诊断用）'
+        description: '裁剪与启动无关的子系统（注意：不能裁 CONFIG_TRACING / CONFIG_ARM_UNWIND，rockchip 预编译 rk_ftl_arm_v7.S 依赖它们）'
         type: boolean
         required: false
-        default: true
+        default: false
       fbconsole:
         description: '内建 console=tty0 + ignore_loglevel，让内核日志显示在屏幕上'
         type: boolean
@@ -163,17 +163,6 @@ jobs:
             # 原厂机器上这些功能不依赖内核（无 WiFi/BT 模块、无 ftrace 需求），
             # 裁剪只影响调试能力与未使用驱动，不影响 USB/显示/存储/输入。
             {
-              echo "# CONFIG_ARM_UNWIND is not set"
-              echo "# CONFIG_FTRACE is not set"
-              echo "# CONFIG_FUNCTION_TRACER is not set"
-              echo "# CONFIG_FUNCTION_GRAPH_TRACER is not set"
-              echo "# CONFIG_DYNAMIC_FTRACE is not set"
-              echo "# CONFIG_STACK_TRACER is not set"
-              echo "# CONFIG_KPROBES is not set"
-              echo "# CONFIG_UPROBES is not set"
-              echo "# CONFIG_PERF_EVENTS is not set"
-              echo "# CONFIG_HW_PERF_EVENTS is not set"
-              echo "# CONFIG_DYNAMIC_DEBUG is not set"
               echo "# CONFIG_BT is not set"
               echo "# CONFIG_BT_HCIUART is not set"
               echo "# CONFIG_BT_RFCOMM is not set"
@@ -199,13 +188,22 @@ jobs:
           fi
 
           if [ "${{ github.event.inputs.fbconsole }}" = "true" ]; then
-            echo "== 内建命令行：console=tty0 =="
-            # CONFIG_CMDLINE_EXTEND=y 会把 CONFIG_CMDLINE 追加到 bootloader 传来的
-            # 命令行之后，因此 U-Boot / dtb 里的 vmalloc=496M console=ttyFIQ0 等
-            # 全部保留，只是多挂一个 framebuffer 控制台。
-            # 目的：黑屏时能在屏幕上直接看到内核 panic，摆脱"无串口即盲飞"。
+            echo "== 打开 VT + framebuffer console（原厂 defconfig 把 CONFIG_VT 关了）=="
+            # rockchip_defconfig 是 Android 版，CONFIG_VT / FRAMEBUFFER_CONSOLE 全关，
+            # 所以内核 panic 时屏幕上什么都没有。这里补上，配合 CONFIG_CMDLINE 的
+            # console=tty0 就能在平板上直接看到内核日志。
             {
-              echo 'CONFIG_CMDLINE="console=tty0 ignore_loglevel loglevel=8"'
+              echo "CONFIG_VT=y"
+              echo "CONFIG_VT_CONSOLE=y"
+              echo "CONFIG_HW_CONSOLE=y"
+              echo "CONFIG_FRAMEBUFFER_CONSOLE=y"
+              echo "CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y"
+              echo "CONFIG_DUMMY_CONSOLE=y"
+              echo "CONFIG_FONTS=y"
+              echo "CONFIG_FONT_8x16=y"
+              echo "CONFIG_FONT_8x8=y"
+              echo "CONFIG_LOGO=y"
+              echo 'CONFIG_CMDLINE="console=tty0 ignore_loglevel keep_bootcon loglevel=8"'
               echo "CONFIG_CMDLINE_EXTEND=y"
               echo "# CONFIG_CMDLINE_FORCE is not set"
             } >> "$KSRC/.config"
